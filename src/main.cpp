@@ -8,9 +8,117 @@
 #include <SPI.h>
 #include <BME280I2C.h>
 #include <string>
+#include <stdio.h>
+#include <cmath>
+#include <iostream>
+
 
 
 // ZMIENNE
+
+class PIDImpl;
+class PID
+{
+    public:
+        // Kp -  proportional gain
+        // Ki -  Integral gain
+        // Kd -  derivative gain
+        // dt -  loop interval time
+        // max - maximum value of manipulated variable
+        // min - minimum value of manipulated variable
+        PID( double dt, double max, double min, double Kp, double Kd, double Ki );
+
+        // Returns the manipulated variable given a setpoint and current process value
+        double calculate( double setpoint, double pv );
+        ~PID();
+
+    private:
+        PIDImpl *pimpl;
+};
+
+
+class PIDImpl
+{
+    public:
+        PIDImpl( double dt, double max, double min, double Kp, double Kd, double Ki );
+        ~PIDImpl();
+        double calculate( double setpoint, double pv );
+
+    private:
+        double _dt;
+        double _max_val;
+        double _min_val;
+        double _Kp;
+        double _Kd;
+        double _Ki;
+        double _pre_error;
+        double _integral;
+};
+
+PID::PID( double dt, double max, double min, double Kp, double Kd, double Ki )
+{
+    pimpl = new PIDImpl(dt,max,min,Kp,Kd,Ki);
+}
+double PID::calculate( double setpoint, double pv )
+{
+    return pimpl->calculate(setpoint,pv);
+}
+PID::~PID() 
+{
+    delete pimpl;
+}
+
+
+/**
+ * Implementation
+ */
+PIDImpl::PIDImpl( double dt, double max, double min, double Kp, double Kd, double Ki ) :
+    _dt(dt),
+    _max_val(max),
+    _min_val(min),
+    _Kp(Kp),
+    _Kd(Kd),
+    _Ki(Ki),
+    _pre_error(0),
+    _integral(0)
+{
+}
+
+double PIDImpl::calculate( double setpoint, double pv )
+{
+    
+    // Calculate error
+    double error = setpoint - pv;
+
+    // Proportional term
+    double Pout = _Kp * error;
+
+    // Integral term
+    _integral += error * _dt;
+    double Iout = _Ki * _integral;
+
+    // Derivative term
+    double derivative = (error - _pre_error) / _dt;
+    double Dout = _Kd * derivative;
+
+    // Calculate total output
+    double output = Pout + Iout + Dout;
+
+    // Restrict to max/min
+    if( output > _max_val )
+        output = _max_val;
+    else if( output < _min_val )
+        output = _min_val;
+
+    // Save error to previous error
+    _pre_error = error;
+
+    return output;
+}
+
+PIDImpl::~PIDImpl()
+{
+}
 
 //sterowanie
 float temp_zadana = 21.0; 
@@ -105,13 +213,47 @@ bool sterowanie(int &tryb, int &duty_heatbed, int &duty_peltier)
   //Dwustanowe
   if(tryb == 1)
   {
+    float histereza = 2.0;
+    float temp_aktualna = readTemperature();
     
+    // temp_zadana > temp_aktualna - histereza || temp_zadana > temp_aktualna + histereza
+    if (temp_aktualna < temp_zadana - (histereza/2))
+    {
+      duty_heatbed = 255;
+      duty_peltier = 0;
+    }
+    else if(temp_aktualna > temp_zadana + (histereza/2))
+    {
+      duty_heatbed = 0;
+      duty_peltier = 255;
+    }
+    else
+    {
+      duty_heatbed = 0;
+      duty_peltier = 0;
+    } 
+
+    ledcWrite(kanal1, duty_heatbed);
+    ledcWrite(kanal2, duty_peltier);
     return true;
   }
   //PID
   if(tryb == 2)
   {
     
+    PID pid = PID(0.1, 127, -127, 0.1, 0.01, 0.5);
+
+    double val = 20;
+    for (int i = 0; i < 100; i++) {
+        double inc = pid.calculate(0, val);
+        printf("val:% 7.3f inc:% 7.3f\n", val, inc);
+        val += inc;
+    }
+    // jak robic z tymi wzmocnieniami trzeba sie zastanowic
+
+    ledcWrite(kanal1, duty_heatbed);
+    ledcWrite(kanal2, duty_peltier);
+
     return true;
   }
   //Logika rozmyta
@@ -551,7 +693,7 @@ void loop()
       json["temperatura"] = readTemperature();
       json["temp_zadana"] = temp_zadana;
       json["id_sterowania"] = tryb;
-      json["pobor"] = analogRead(34) + analogRead(35); //odczytane wartosci z pinow 34 i 35
+      json["pobor"] = 0; //TODO pobor energii
       json["heatbed"] = duty_heatbed;
       json["peltier"] = duty_peltier;
       char buffer[300];
