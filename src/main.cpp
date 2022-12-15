@@ -695,7 +695,7 @@ void loop()
       json["temperatura"] = readTemperature();
       json["temp_zadana"] = temp_zadana;
       json["id_sterowania"] = tryb;
-      json["pobor"] = 0; //TODO pobor energii
+      json["pobor"] = analogRead(34) + analogRead(35); //odczytane wartosci z pinow 34 i 35
       json["heatbed"] = duty_heatbed;
       json["peltier"] = duty_peltier;
       char buffer[300];
