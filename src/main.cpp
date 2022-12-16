@@ -122,7 +122,7 @@ PIDImpl::~PIDImpl()
 }
 
 //sterowanie
-float temp_zadana = 21.0; 
+float temp_zadana = 25.0; 
 int tryb = 0;
 int duty_heatbed = 0;
 int duty_peltier = 0;
@@ -225,16 +225,19 @@ bool sterowanie(int &tryb, int &duty_heatbed, int &duty_peltier)
     {
       duty_heatbed = 255;
       duty_peltier = 0;
+      Serial.println("Grzeje!");
     }
     else if(temp_aktualna > temp_zadana + (histereza/2))
     {
       duty_heatbed = 0;
       duty_peltier = 255;
+      Serial.println("Chlodze!");
     }
     else
     {
       duty_heatbed = 0;
       duty_peltier = 0;
+      Serial.println("Nic nie robie");
     } 
 
     ledcWrite(kanal1, duty_heatbed);
@@ -432,9 +435,9 @@ void keep_WiFi()
     Serial.println(gateway);
     init_WiFi();
   }
-  else
+  /*else
     Serial.print("\nWiFi OK: ");
-    Serial.print(ssid);
+    Serial.print(ssid);*/
 }
 
 // funkcja uruchamiająca AP
