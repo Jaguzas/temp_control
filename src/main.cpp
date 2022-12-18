@@ -32,6 +32,7 @@ class PIDImpl
         double _Ki;
         double _pre_error;
         double _integral;
+        double _lastT;
 };
 
 class PID
@@ -83,11 +84,15 @@ PIDImpl::PIDImpl( double dt, double max, double min, double Kp, double Kd, doubl
     _pre_error(0),
     _integral(0)
 {
+  _lastT = millis();
 }
 
 double PIDImpl::calculate( double setpoint, double pv )
 {
-    
+    double t = millis();
+    _dt = t - _lastT;
+    _lastT = t;
+
     // Calculate error
     double error = setpoint - pv;
 
@@ -105,6 +110,7 @@ double PIDImpl::calculate( double setpoint, double pv )
     // Calculate total output
     double output = Pout + Iout + Dout;
 
+    double output_computed = output;
     // Restrict to max/min
     if( output > _max_val )
         output = _max_val;
@@ -114,6 +120,15 @@ double PIDImpl::calculate( double setpoint, double pv )
     // Save error to previous error
     _pre_error = error;
 
+    static int opusc = 0;
+    opusc++;
+    if ( opusc == 1000 )
+    {
+       Serial.printf("PID:calc: dt: %.3f, S:%.3f, PV:%.3f, out:%.3f, D:%.3f\n", _dt, setpoint, pv, output_computed, (output / _max_val) * 255 );
+       opusc=0;
+    }
+    
+
     return output;
 }
 
@@ -122,7 +137,7 @@ PIDImpl::~PIDImpl()
 }
 
 //sterowanie
-float temp_zadana = 25.0; 
+double temp_zadana = 25.5; 
 int tryb = 0;
 int duty_heatbed = 0;
 int duty_peltier = 0;
@@ -131,7 +146,16 @@ const int kanal1 = 0; //kanaly (mozna dac pare pinow w jeden kanal i beda mialy 
 const int kanal2 = 1;
 const int resolution = 8; //rozdzielczosc 8bit -> 0 do 255
 // regulator pid
-static PID pid (0.1, 127, -127, 0.1, 0.01, 0.5);
+// 
+const double pid_range = 10000;
+// Okres probkowania regulatora [ms]
+const double T = 100;
+static PID pid (T/1000,   // dt 
+                pid_range,  // max
+               -pid_range,   // min
+                10,   // Kp
+                0.0, // Kd
+                0.01);  // Ki
 
 //sciezki do plikow
 const char *ssidPath = "/ssid.txt";
@@ -164,6 +188,7 @@ unsigned long previousMillis = 0;
 unsigned long currentMillis2;
 unsigned long previousMillis2 = 0;
 const long wifi_timeoutMillis = 10000;
+unsigned long previousRegMillis = 0;
 
 AsyncWebServer server(80);
 //MQTT
@@ -218,7 +243,7 @@ bool sterowanie(int &tryb, int &duty_heatbed, int &duty_peltier)
   //Dwustanowe
   if(tryb == 1)
   {
-    float histereza = 2.0;
+    float histereza = 1.0;
     
     // temp_zadana > temp_aktualna - histereza || temp_zadana > temp_aktualna + histereza
     if (temp_aktualna < temp_zadana - (histereza/2))
@@ -248,14 +273,21 @@ bool sterowanie(int &tryb, int &duty_heatbed, int &duty_peltier)
   if(tryb == 2)
   {
     // przyrost wartosci:    
-    double output = pid.calculate(temp_zadana, temp_aktualna);
-    // jak robic z tymi wzmocnieniami trzeba sie zastanowic
-    // do sprawdzenia:
-    // jak inc < 0: chlodzenie
-    // jak inc > 0: grzanie
-    // ???
-    // duty_heatbed += output;
-
+    double duty = (pid.calculate(temp_zadana, temp_aktualna) / pid_range) * 255;
+    // const int min_duty = 190;
+    // const int max_duty = 240;
+    if ( duty < 0 )
+    {    
+      duty_heatbed = 0;
+      duty_peltier = (int) -duty;
+    }
+    else {
+      duty_heatbed = duty;
+      duty_peltier = (int) 0;
+    }
+    
+    // Serial.printf("DH:%d, DP: %d\n", duty_heatbed, duty_peltier );
+    
     ledcWrite(kanal1, duty_heatbed);
     ledcWrite(kanal2, duty_peltier);
 
@@ -407,6 +439,7 @@ bool init_WiFi()
 
   currentMillis = millis();
   previousMillis = currentMillis;
+  previousRegMillis = currentMillis;
 
   while (WiFi.status() != WL_CONNECTED)
   {
@@ -669,7 +702,7 @@ void setup()
 }
 
 void loop()
-{
+{  
   if (connected_once)
   {
     keep_WiFi();
@@ -706,8 +739,11 @@ void loop()
       client.publish("esp32/input/temperature",buffer);
       previousMillis2 = currentMillis2;
     }
-    
-    if(!sterowanie(tryb, duty_heatbed, duty_peltier)) Serial.println("Wrong mode selected!");
+    // if(currentMillis - previousRegMillis >= T)
+    {
+      previousRegMillis = currentMillis;
+      if(!sterowanie(tryb, duty_heatbed, duty_peltier)) Serial.println("Wrong mode selected!");
+    }
   }
   else
   {
