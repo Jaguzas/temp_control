@@ -119,7 +119,7 @@ double PIDImpl::calculate( double setpoint, double pv )
 
     // Save error to previous error
     _pre_error = error;
-
+    //_lastT = t; 
     static int opusc = 0;
     opusc++;
     if ( opusc == 1000 )
@@ -137,7 +137,7 @@ PIDImpl::~PIDImpl()
 }
 
 //sterowanie
-double temp_zadana = 25.5; 
+double temp_zadana = 25.0;
 int tryb = 0;
 int duty_heatbed = 0;
 int duty_peltier = 0;
@@ -245,26 +245,21 @@ bool sterowanie(int &tryb, int &duty_heatbed, int &duty_peltier)
   {
     float histereza = 1.0;
     
-    // temp_zadana > temp_aktualna - histereza || temp_zadana > temp_aktualna + histereza
-    if (temp_aktualna < temp_zadana - (histereza/2))
+    if (temp_aktualna < temp_zadana - (histereza/2.0))
     {
-      duty_heatbed = 255;
+
+      duty_heatbed = 190;
       duty_peltier = 0;
-      Serial.println("Grzeje!");
+      //Serial.println("Grzeje!");
     }
-    else if(temp_aktualna > temp_zadana + (histereza/2))
+    if(temp_aktualna > temp_zadana + (histereza/2.0))
     {
       duty_heatbed = 0;
       duty_peltier = 255;
-      Serial.println("Chlodze!");
+      //Serial.println("Chlodze!");
     }
-    else
-    {
-      duty_heatbed = 0;
-      duty_peltier = 0;
-      Serial.println("Nic nie robie");
-    } 
-
+    
+    
     ledcWrite(kanal1, duty_heatbed);
     ledcWrite(kanal2, duty_peltier);
     return true;
@@ -724,7 +719,7 @@ void loop()
     }
     
     //wysylanie danych do serwera
-    if(currentMillis2 - previousMillis2 > 500)
+    if(currentMillis2 - previousMillis2 > 1000)
     {
       StaticJsonDocument<300> json;
       json["czas"] = millis();
