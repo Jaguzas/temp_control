@@ -248,7 +248,7 @@ bool sterowanie(int &tryb, int &duty_heatbed, int &duty_peltier)
     if (temp_aktualna < temp_zadana - (histereza/2.0))
     {
 
-      duty_heatbed = 190;
+      duty_heatbed = 180;
       duty_peltier = 0;
       //Serial.println("Grzeje!");
     }
