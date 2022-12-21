@@ -16,128 +16,94 @@
 
 // ZMIENNE
 
-class PIDImpl
-{
-    public:
-        PIDImpl( double dt, double max, double min, double Kp, double Kd, double Ki );
-        ~PIDImpl();
-        double calculate( double setpoint, double pv );
-
-    private:
-        double _dt;
-        double _max_val;
-        double _min_val;
-        double _Kp;
-        double _Kd;
-        double _Ki;
-        double _pre_error;
-        double _integral;
-        double _lastT;
-};
-
 class PID
 {
-    public:
-        // Kp -  proportional gain
-        // Ki -  Integral gain
-        // Kd -  derivative gain
-        // dt -  loop interval time
-        // max - maximum value of manipulated variable
-        // min - minimum value of manipulated variable
-        PID( double dt, double max, double min, double Kp, double Kd, double Ki );
+public:
+  // Kp -  proportional gain
+  // Ki -  Integral gain
+  // Kd -  derivative gain
+  // dt -  loop interval time
+  // max - maximum value of manipulated variable
+  // min - minimum value of manipulated variable    
+  PID(  // double dt, 
+        double max, double min, double Kp, double Kd, double Ki);
+  ~PID();
+  double calculate(double setpoint, double pv, double& output /* dla testow - output bez obciecia */);
 
-        // Returns the manipulated variable given a setpoint and current process value
-        double calculate( double setpoint, double pv );
-        ~PID();
-
-    private:
-        PIDImpl *pimpl;
+private:
+  // double _dt;
+  double _max_val;
+  double _min_val;
+  double _Kp;
+  double _Kd;
+  double _Ki;
+  double _pre_error;
+  double _integral;
+  double _lastT;
 };
 
-
-
-
-PID::PID( double dt, double max, double min, double Kp, double Kd, double Ki )
-{
-    pimpl = new PIDImpl(dt,max,min,Kp,Kd,Ki);
-}
-double PID::calculate( double setpoint, double pv )
-{
-    return pimpl->calculate(setpoint,pv);
-}
-PID::~PID() 
-{
-    delete pimpl;
-}
 
 
 /**
  * Implementation
  */
-PIDImpl::PIDImpl( double dt, double max, double min, double Kp, double Kd, double Ki ) :
-    _dt(dt),
-    _max_val(max),
-    _min_val(min),
-    _Kp(Kp),
-    _Kd(Kd),
-    _Ki(Ki),
-    _pre_error(0),
-    _integral(0)
+PID::PID(
+   // double dt, 
+   double max, double min, double Kp, double Kd, double Ki) :
+  // _dt(dt),
+  _max_val(max),
+  _min_val(min),
+  _Kp(Kp),
+  _Kd(Kd),
+  _Ki(Ki),
+  _pre_error(0),
+  _integral(0),
+  _lastT(0)
 {
-  _lastT = millis();
 }
 
-double PIDImpl::calculate( double setpoint, double pv )
+double PID::calculate(double setpoint, double pv, double& ret_out)
 {
-    double t = millis();
-    _dt = t - _lastT;
-    _lastT = t;
+  double t = millis();
+  double dt = t - _lastT;
 
-    // Calculate error
-    double error = setpoint - pv;
+  _lastT = t;
+  // Calculate error
+  double error = setpoint - pv;
 
-    // Proportional term
-    double Pout = _Kp * error;
+  // Proportional term
+  double Pout = _Kp * error;
 
-    // Integral term
-    _integral += error * _dt;
-    double Iout = _Ki * _integral;
+  // Integral term
+  _integral += error * dt;
+  double Iout = _Ki * _integral;
 
-    // Derivative term
-    double derivative = (error - _pre_error) / _dt;
-    double Dout = _Kd * derivative;
+  // Derivative term
+  double derivative = (error - _pre_error) / dt;
+  double Dout = _Kd * derivative;
 
-    // Calculate total output
-    double output = Pout + Iout + Dout;
+  // Calculate total output
+  double output = Pout + Iout + Dout;
+  ret_out = output;
 
-    double output_computed = output;
-    // Restrict to max/min
-    if( output > _max_val )
-        output = _max_val;
-    else if( output < _min_val )
-        output = _min_val;
+  // Restrict to max/min
+  if (output > _max_val)
+    output = _max_val;
+  else if (output < _min_val)
+    output = _min_val;
 
-    // Save error to previous error
-    _pre_error = error;
-    //_lastT = t; 
-    static int opusc = 0;
-    opusc++;
-    if ( opusc == 1000 )
-    {
-       Serial.printf("PID:calc: dt: %.3f, S:%.3f, PV:%.3f, out:%.3f, D:%.3f\n", _dt, setpoint, pv, output_computed, (output / _max_val) * 255 );
-       opusc=0;
-    }
-    
+  // Save error to previous error
+  _pre_error = error;
 
-    return output;
+  return output;
 }
 
-PIDImpl::~PIDImpl()
+PID::~PID()
 {
 }
 
 //sterowanie
-double temp_zadana = 25.0;
+double temp_zadana = 27.0;
 int tryb = 0;
 int duty_heatbed = 0;
 int duty_peltier = 0;
@@ -145,12 +111,13 @@ const int freq = 1000; //czestotliwosc
 const int kanal1 = 0; //kanaly (mozna dac pare pinow w jeden kanal i beda mialy identyczny sygnal)
 const int kanal2 = 1;
 const int resolution = 8; //rozdzielczosc 8bit -> 0 do 255
+
 // regulator pid
 // 
-const double pid_range = 10000;
+const double pid_range = 1000000;
 // Okres probkowania regulatora [ms]
 const double T = 100;
-static PID pid (T/1000,   // dt 
+static PID pid (  // T/1000,  
                 pid_range,  // max
                -pid_range,   // min
                 10,   // Kp
@@ -267,21 +234,60 @@ bool sterowanie(int &tryb, int &duty_heatbed, int &duty_peltier)
   //PID
   if(tryb == 2)
   {
+    double pid_out_ = 0; // pewnie niepotrzebne
+
+    const double min_punkt_grzania = 135.0;
+    const double max_punkt_grzania = 190.0;
+
+    static double max_pid_output =  max_punkt_grzania;
+    static double min_pid_output = -200;
     // przyrost wartosci:    
-    double duty = (pid.calculate(temp_zadana, temp_aktualna) / pid_range) * 255;
-    // const int min_duty = 190;
-    // const int max_duty = 240;
-    if ( duty < 0 )
-    {    
-      duty_heatbed = 0;
-      duty_peltier = (int) -duty;
+    double duty = pid.calculate(temp_zadana, temp_aktualna, pid_out_);
+
+    if ( duty >= 0 )
+    { 
+      // adaptacja do skrajnych wartoisci
+       if ( duty >= max_pid_output)
+       {
+           max_pid_output = duty;
+       }
+       duty = (duty / max_pid_output) * max_punkt_grzania;
+       //moje
+       duty_heatbed = duty;
+       
+      if ( duty >= min_punkt_grzania ){
+        duty_heatbed = duty;
+      }
+      else{
+        duty_heatbed = min_punkt_grzania;
+      }
+
+      // stare ponizej
+       //duty_heatbed = min((duty + min_punkt_grzania ), max_punkt_grzania ); // 120 - zaczyna grzac
+      // tak nie moze bo duty + min > 190 jak zaczyna spadac
+
+
+       // duty_heatbed = duty;
+       duty_peltier = (int) 0;         
     }
     else {
-      duty_heatbed = duty;
-      duty_peltier = (int) 0;
+      duty_heatbed = 0;
+      if ( duty <= min_pid_output)
+      {
+           min_pid_output = duty;
+       }
+      duty = -((duty / min_pid_output) * 255);
+      duty_peltier = (int) -(duty);
+      
     }
     
-    // Serial.printf("DH:%d, DP: %d\n", duty_heatbed, duty_peltier );
+    static int opusc = 0;
+    opusc++;
+    if ( opusc == 1000 )
+    {
+       Serial.printf("min-pid-out: %f, max-pid-out: %f, OUT: %f, DH:%d, DP: %d\n",  min_pid_output, max_pid_output, duty, duty_heatbed, duty_peltier );   
+       opusc=0;
+    }
     
     ledcWrite(kanal1, duty_heatbed);
     ledcWrite(kanal2, duty_peltier);
