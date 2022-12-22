@@ -28,7 +28,7 @@ public:
   PID(  // double dt, 
         double max, double min, double Kp, double Kd, double Ki);
   ~PID();
-  double calculate(double setpoint, double pv, double& output /* dla testow - output bez obciecia */);
+  double calculate(double setpoint, double pv);
 
 private:
   // double _dt;
@@ -62,11 +62,13 @@ PID::PID(
 {
 }
 
-double PID::calculate(double setpoint, double pv, double& ret_out)
+double PID::calculate(double setpoint, double pv)
 {
   double t = millis();
   double dt = t - _lastT;
 
+  dt = 1000;
+  
   _lastT = t;
   // Calculate error
   double error = setpoint - pv;
@@ -83,8 +85,7 @@ double PID::calculate(double setpoint, double pv, double& ret_out)
   double Dout = _Kd * derivative;
 
   // Calculate total output
-  double output = Pout + Iout + Dout;
-  ret_out = output;
+  double output = Pout + Iout + Dout;  
 
   // Restrict to max/min
   if (output > _max_val)
@@ -95,6 +96,7 @@ double PID::calculate(double setpoint, double pv, double& ret_out)
   // Save error to previous error
   _pre_error = error;
 
+  printf("calc: dt=%.2f, err=%.2f => %.2f\n", dt, error, output);
   return output;
 }
 
@@ -103,7 +105,7 @@ PID::~PID()
 }
 
 //sterowanie
-double temp_zadana = 27.0;
+double temp_zadana = 23.0;
 int tryb = 0;
 int duty_heatbed = 0;
 int duty_peltier = 0;
@@ -116,7 +118,7 @@ const int resolution = 8; //rozdzielczosc 8bit -> 0 do 255
 // 
 const double pid_range = 1000000;
 // Okres probkowania regulatora [ms]
-const double T = 100;
+const double T = 1000;
 static PID pid (  // T/1000,  
                 pid_range,  // max
                -pid_range,   // min
@@ -185,6 +187,67 @@ void init_PWM()
   ledcAttachPin(23, kanal2);
 }
 
+// zwroc zakres PWM odpowiadajacy wyjsciu regulatora
+// Mapuj wartosc pid_output do zakresu pwm_range_begin-pwm_range_end proporcjonalnie do zakresu 0-max_pid_output/
+// 
+// PID-range jest wyliczany dynamicznie do najwiekszej wartosci zwracanej przez regulator. Osobno dla dodatnich i ujemnych.
+// 
+// Np.:
+// pwm_range_start = 100
+// pwm_range_end   = 200
+// pid_output = 150
+// max_pid_output = 1000
+// 
+// Mapowanie przedzialow:
+// 
+//           PID                                PWM
+//
+//   min_pid_output : 0                   
+// 
+//                                             pwm_range_begin = 100
+//    
+//                                            
+//                                             d = ? (odpowiednik 'p')  
+//                p : 500                     
+//                                             pwm_range_end   = 190
+//                                          
+//
+//
+//   max_pid_output : 1000
+//
+//   Proporcja:
+// 
+//       p            max_pid_output - min_pid_output
+//       _   =    _____________________________________
+//       d            pwm_range_end - pwm_range_begin
+//
+//                 (pwm_range_end - pwm_range_begin) * P
+//       d =      _______________________________________
+//                    max_pid_output - min_pid_output
+// 
+//               190 - 100
+//       d =  _______________  * 500 =  49.8 
+//               1000 - 0
+//
+//   d trzeba jeszcze "przesunac" o pwm_range_begin, czyli ostatecznie d = d + pwm_range_begin  = 149.9  - czyli jest w polowie zakresu, tak jak PID-output.
+//
+double pid_output_to_duty(double pid_output, double max_pid_output, double pwm_range_begin, double pwm_range_end )
+{  
+  double duty = ((pwm_range_end - pwm_range_begin) / max_pid_output) * pid_output;
+  duty += pwm_range_begin;
+  if ( duty > pwm_range_end )
+  {
+     duty = pwm_range_end;
+  }
+   static int print = 0;
+  print++;
+  if ( print < 100 ) 
+  {
+    // printf("pid output: %.2f\t(zakres: 0 -\t%.2f) => duty: %.2f\t(zakres: %.2f\t- %.2f)\n", pid_output, max_pid_output, duty, pwm_range_begin, pwm_range_end);
+  }  
+  return duty;
+}
+
 //TODO algorytmy sterowania temperatura
 //readTemperature(); - temperatura obecna (float)
 //temp_zadana - temperatura zadana
@@ -233,59 +296,76 @@ bool sterowanie(int &tryb, int &duty_heatbed, int &duty_peltier)
   }
   //PID
   if(tryb == 2)
-  {
-    double pid_out_ = 0; // pewnie niepotrzebne
-
-    const double min_punkt_grzania = 135.0;
+  {    
+    const double min_punkt_grzania = 100.0;
     const double max_punkt_grzania = 190.0;
+    static double max_pid_output =  0;
 
-    static double max_pid_output =  max_punkt_grzania;
-    static double min_pid_output = -200;
+    static bool init_adapt = true;
+    static bool adapt_max = true;
+    static bool adapt_min = true;
+
+    const double max_punkt_chlodz = -255;
+    const double min_punkt_chlodz = 0;
+    static double min_pid_output =  0;
+
+    double duty = 0;
     // przyrost wartosci:    
-    double duty = pid.calculate(temp_zadana, temp_aktualna, pid_out_);
+    double pid_out = pid.calculate(temp_zadana, temp_aktualna);
 
-    if ( duty >= 0 )
+    
+
+    if ( pid_out >= 0 )
     { 
-      // adaptacja do skrajnych wartoisci
-       if ( duty >= max_pid_output)
+       if ( init_adapt )
        {
-           max_pid_output = duty;
+           adapt_max = true;
+           adapt_min = false;
+           init_adapt = false;
        }
-       duty = (duty / max_pid_output) * max_punkt_grzania;
-       //moje
-       duty_heatbed = duty;
-       
-      if ( duty >= min_punkt_grzania ){
-        duty_heatbed = duty;
-      }
-      else{
-        duty_heatbed = min_punkt_grzania;
-      }
-
-      // stare ponizej
-       //duty_heatbed = min((duty + min_punkt_grzania ), max_punkt_grzania ); // 120 - zaczyna grzac
-      // tak nie moze bo duty + min > 190 jak zaczyna spadac
-
-
-       // duty_heatbed = duty;
+       if ( adapt_min )
+       {
+          adapt_min = false;
+       }
+      // adaptacja do skrajnych wartoisci
+        
+       if ( pid_out >= max_pid_output)
+       {
+           max_pid_output = pid_out;
+       }
+       //  double pid_output, double max_pid_output, double pwm_range_begin, double pwm_range_end 
+       duty = pid_output_to_duty(  pid_out,  max_pid_output, min_punkt_grzania, max_punkt_grzania);
+       duty_heatbed = duty;                   
        duty_peltier = (int) 0;         
+
+       
     }
     else {
-      duty_heatbed = 0;
-      if ( duty <= min_pid_output)
-      {
-           min_pid_output = duty;
+      if ( init_adapt )
+       {
+           adapt_max = false;
+           adapt_min = true;
+           init_adapt = false;
        }
-      duty = -((duty / min_pid_output) * 255);
-      duty_peltier = (int) -(duty);
+      if ( adapt_max )
+       {
+          adapt_max = false;
+       }
+      if (pid_out <= min_pid_output)
+      {
+           min_pid_output = pid_out;
+      }
+      duty_heatbed = 0;       
+      duty = pid_output_to_duty(  pid_out,  max_pid_output, min_punkt_chlodz, max_punkt_chlodz);      
       
+      duty_peltier = -duty;      
     }
     
     static int opusc = 0;
     opusc++;
-    if ( opusc == 1000 )
+    if ( true || opusc == 1000 )
     {
-       Serial.printf("min-pid-out: %f, max-pid-out: %f, OUT: %f, DH:%d, DP: %d\n",  min_pid_output, max_pid_output, duty, duty_heatbed, duty_peltier );   
+       Serial.printf("min-pid-out: %f, max-pid-out: %f, pid-out: %f, duty: %f, DH:%d, DP: %d\n",  min_pid_output, max_pid_output, pid_out, duty, duty_heatbed, duty_peltier );   
        opusc=0;
     }
     
@@ -740,7 +820,7 @@ void loop()
       client.publish("esp32/input/temperature",buffer);
       previousMillis2 = currentMillis2;
     }
-    // if(currentMillis - previousRegMillis >= T)
+    if(currentMillis - previousRegMillis >= T)
     {
       previousRegMillis = currentMillis;
       if(!sterowanie(tryb, duty_heatbed, duty_peltier)) Serial.println("Wrong mode selected!");
