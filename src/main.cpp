@@ -29,6 +29,7 @@ public:
         double max, double min, double Kp, double Kd, double Ki);
   ~PID();
   double calculate(double setpoint, double pv);
+  void reset();
 
 private:
   // double _dt;
@@ -39,7 +40,7 @@ private:
   double _Ki;
   double _pre_error;
   double _integral;
-  double _lastT;
+  // double _lastT;
 };
 
 
@@ -57,19 +58,23 @@ PID::PID(
   _Kd(Kd),
   _Ki(Ki),
   _pre_error(0),
-  _integral(0),
-  _lastT(0)
+  _integral(0)
+  //_lastT(0)
 {
+}
+
+void PID::reset()
+{
+   _pre_error = 0;
+   _integral = 0;   
 }
 
 double PID::calculate(double setpoint, double pv)
 {
   double t = millis();
-  double dt = t - _lastT;
+  double dt = 1000; // = t - _lastT;
 
-  dt = 1000;
-  
-  _lastT = t;
+  // _lastT = t;
   // Calculate error
   double error = setpoint - pv;
 
@@ -86,6 +91,7 @@ double PID::calculate(double setpoint, double pv)
 
   // Calculate total output
   double output = Pout + Iout + Dout;  
+  double output_org = output;
 
   // Restrict to max/min
   if (output > _max_val)
@@ -96,7 +102,7 @@ double PID::calculate(double setpoint, double pv)
   // Save error to previous error
   _pre_error = error;
 
-  printf("calc: dt=%.2f, err=%.2f => %.2f\n", dt, error, output);
+  printf("calc: dt=%.2f, err=%.2f => %.2f (%.2f)\n", dt, error, output, output_org);
   return output;
 }
 
@@ -105,7 +111,7 @@ PID::~PID()
 }
 
 //sterowanie
-double temp_zadana = 23.0;
+double temp_zadana = 27.0;
 int tryb = 0;
 int duty_heatbed = 0;
 int duty_peltier = 0;
@@ -116,15 +122,19 @@ const int resolution = 8; //rozdzielczosc 8bit -> 0 do 255
 
 // regulator pid
 // 
-const double pid_range = 1000000;
+const double min_punkt_grzania = 0.0;
+const double max_punkt_grzania =  190.0;
+const double min_punkt_chlodzenia = 0.0;
+
+const double pid_range = 255;
 // Okres probkowania regulatora [ms]
 const double T = 1000;
 static PID pid (  // T/1000,  
-                pid_range,  // max
-               -pid_range,   // min
-                10,   // Kp
-                0.0, // Kd
-                0.01);  // Ki
+                max_punkt_grzania - min_punkt_grzania,  // max
+               -(max_punkt_grzania - min_punkt_grzania),   // min
+                25.0,   // Kp
+                3.0, // Kd
+                0.05);  // Ki
 
 //sciezki do plikow
 const char *ssidPath = "/ssid.txt";
@@ -297,75 +307,30 @@ bool sterowanie(int &tryb, int &duty_heatbed, int &duty_peltier)
   //PID
   if(tryb == 2)
   {    
-    const double min_punkt_grzania = 100.0;
-    const double max_punkt_grzania = 190.0;
-    static double max_pid_output =  0;
-
-    static bool init_adapt = true;
-    static bool adapt_max = true;
-    static bool adapt_min = true;
-
-    const double max_punkt_chlodz = -255;
-    const double min_punkt_chlodz = 0;
-    static double min_pid_output =  0;
 
     double duty = 0;
     // przyrost wartosci:    
-    double pid_out = pid.calculate(temp_zadana, temp_aktualna);
-
-    
+    double pid_out = pid.calculate(temp_zadana, temp_aktualna);    
 
     if ( pid_out >= 0 )
-    { 
-       if ( init_adapt )
-       {
-           adapt_max = true;
-           adapt_min = false;
-           init_adapt = false;
-       }
-       if ( adapt_min )
-       {
-          adapt_min = false;
-       }
-      // adaptacja do skrajnych wartoisci
-        
-       if ( pid_out >= max_pid_output)
-       {
-           max_pid_output = pid_out;
-       }
+    {       
        //  double pid_output, double max_pid_output, double pwm_range_begin, double pwm_range_end 
-       duty = pid_output_to_duty(  pid_out,  max_pid_output, min_punkt_grzania, max_punkt_grzania);
-       duty_heatbed = duty;                   
+       // duty = pid_output_to_duty(  pid_out,  max_pid_output, min_punkt_grzania, max_punkt_grzania);              
+       duty_heatbed = (int) pid_out + min_punkt_grzania;                   
        duty_peltier = (int) 0;         
-
        
     }
-    else {
-      if ( init_adapt )
-       {
-           adapt_max = false;
-           adapt_min = true;
-           init_adapt = false;
-       }
-      if ( adapt_max )
-       {
-          adapt_max = false;
-       }
-      if (pid_out <= min_pid_output)
-      {
-           min_pid_output = pid_out;
-      }
-      duty_heatbed = 0;       
-      duty = pid_output_to_duty(  pid_out,  max_pid_output, min_punkt_chlodz, max_punkt_chlodz);      
-      
-      duty_peltier = -duty;      
+    else {      
+       duty_heatbed = 0;       
+       // duty = pid_output_to_duty(  pid_out,  max_pid_output, min_punkt_chlodz, max_punkt_chlodz);                  
+       duty_peltier = (int) - (pid_out - min_punkt_chlodzenia);      
     }
     
     static int opusc = 0;
     opusc++;
     if ( true || opusc == 1000 )
     {
-       Serial.printf("min-pid-out: %f, max-pid-out: %f, pid-out: %f, duty: %f, DH:%d, DP: %d\n",  min_pid_output, max_pid_output, pid_out, duty, duty_heatbed, duty_peltier );   
+       Serial.printf("pid-out: %f, DH:%d, DP: %d\n",  pid_out, duty_heatbed, duty_peltier );   
        opusc=0;
     }
     
@@ -694,7 +659,10 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   {
     if(temp_message == "0") tryb = 0; //reczny
     if(temp_message == "1") tryb = 1; //dwustanowe
-    if(temp_message == "2") tryb = 2; //PID
+    if(temp_message == "2")  {
+       tryb = 2; //PID
+       pid.reset();
+    }
     if(temp_message == "3") tryb = 3; //rozmyta
   }
 
@@ -782,6 +750,17 @@ void setup()
 
 }
 
+double acs_to_amp(double RawValue)
+{   
+   int mVperAmp = 100; // use 100 for 20A Module and 66 for 30A Module   
+   int ACSoffset = 2500; 
+   double Voltage = 0;
+   double Amps = 0;
+   Voltage = (RawValue / 1024.0) * 3300; // Gets you mV
+   Amps = ((Voltage - ACSoffset) / mVperAmp);
+   return Amps;
+}
+
 void loop()
 {  
   if (connected_once)
@@ -812,7 +791,8 @@ void loop()
       json["temperatura"] = readTemperature();
       json["temp_zadana"] = temp_zadana;
       json["id_sterowania"] = tryb;
-      json["pobor"] = analogRead(34) + analogRead(35); //odczytane wartosci z pinow 34 i 35
+      // json["pobor"] = analogRead(34) + analogRead(35); //odczytane wartosci z pinow 34 i 35
+      json["pobor"] =  acs_to_amp(analogRead(34));  // heatbed przeliczony
       json["heatbed"] = duty_heatbed;
       json["peltier"] = duty_peltier;
       char buffer[300];
