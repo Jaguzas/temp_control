@@ -25,14 +25,14 @@ public:
   // dt -  loop interval time
   // max - maximum value of manipulated variable
   // min - minimum value of manipulated variable    
-  PID(  // double dt, 
+  PID(  double dt, 
         double max, double min, double Kp, double Kd, double Ki);
   ~PID();
   double calculate(double setpoint, double pv);
   void reset();
 
 private:
-  // double _dt;
+  double _dt;
   double _max_val;
   double _min_val;
   double _Kp;
@@ -49,9 +49,9 @@ private:
  * Implementation
  */
 PID::PID(
-   // double dt, 
+   double dt, 
    double max, double min, double Kp, double Kd, double Ki) :
-  // _dt(dt),
+   _dt(dt),
   _max_val(max),
   _min_val(min),
   _Kp(Kp),
@@ -71,8 +71,8 @@ void PID::reset()
 
 double PID::calculate(double setpoint, double pv)
 {
-  double t = millis();
-  double dt = 1000; // = t - _lastT;
+  // double t = millis();
+  double dt = _dt / 1000; 
 
   // _lastT = t;
   // Calculate error
@@ -111,30 +111,31 @@ PID::~PID()
 }
 
 //sterowanie
-double temp_zadana = 27.0;
+double temp_zadana = 24.0;
 int tryb = 0;
 int duty_heatbed = 0;
 int duty_peltier = 0;
 const int freq = 1000; //czestotliwosc
 const int kanal1 = 0; //kanaly (mozna dac pare pinow w jeden kanal i beda mialy identyczny sygnal)
 const int kanal2 = 1;
-const int resolution = 8; //rozdzielczosc 8bit -> 0 do 255
+const int resolution = 9;   
+//rozdzielczosc 8bit -> 0 do 255
 
 // regulator pid
 // 
-const double min_punkt_grzania = 0.0;
-const double max_punkt_grzania =  190.0;
+const double min_punkt_grzania = 200.0;
+const double max_punkt_grzania = 450.0;
 const double min_punkt_chlodzenia = 0.0;
 
-const double pid_range = 255;
+// const double pid_range = 255;
 // Okres probkowania regulatora [ms]
 const double T = 1000;
-static PID pid (  // T/1000,  
+static PID pid (T, 
                 max_punkt_grzania - min_punkt_grzania,  // max
-               -(max_punkt_grzania - min_punkt_grzania),   // min
-                25.0,   // Kp
-                3.0, // Kd
-                0.05);  // Ki
+                0, // -(max_punkt_grzania - min_punkt_grzania),   // min
+                 2.4495,       //1.4289,            //2.4495,   // Kp
+                 20.0471,      //0.00,              //20.0471, // Kd
+                 0.0599);      //0.0032);           // 0.0599);  // Ki
 
 //sciezki do plikow
 const char *ssidPath = "/ssid.txt";
@@ -191,8 +192,11 @@ float readTemperature()
 //przypisuje odpowiednie piny PWM do odpowiednich kanalow
 void init_PWM()
 {
-  ledcSetup(kanal1, freq, resolution);
-  ledcSetup(kanal2, freq, resolution);
+  uint32_t f;
+  f = ledcSetup(kanal1, freq, resolution);
+  Serial.printf("Kanal1: freq %d\n", f);
+  f = ledcSetup(kanal2, freq, resolution);
+  Serial.printf("Kanal2: freq %d\n", f);
   ledcAttachPin(22, kanal1);
   ledcAttachPin(23, kanal2);
 }
@@ -312,23 +316,29 @@ bool sterowanie(int &tryb, int &duty_heatbed, int &duty_peltier)
     // przyrost wartosci:    
     double pid_out = pid.calculate(temp_zadana, temp_aktualna);    
 
-    if ( pid_out >= 0 )
+    //duty_heatbed = pid_out;
+    
+    // if ( pid_out >= 0 )
     {       
        //  double pid_output, double max_pid_output, double pwm_range_begin, double pwm_range_end 
        // duty = pid_output_to_duty(  pid_out,  max_pid_output, min_punkt_grzania, max_punkt_grzania);              
        duty_heatbed = (int) pid_out + min_punkt_grzania;                   
-       duty_peltier = (int) 0;         
+       if ( duty_heatbed < 0 )
+       {
+          duty_heatbed = 0;
+       }
+       //duty_peltier = (int) 0;         
        
     }
-    else {      
-       duty_heatbed = 0;       
+    //else {      
+       //duty_heatbed = 0;       
        // duty = pid_output_to_duty(  pid_out,  max_pid_output, min_punkt_chlodz, max_punkt_chlodz);                  
-       duty_peltier = (int) - (pid_out - min_punkt_chlodzenia);      
-    }
+       //duty_peltier = (int) - (pid_out - min_punkt_chlodzenia);      
+    //}
     
     static int opusc = 0;
     opusc++;
-    if ( true || opusc == 1000 )
+    if ( true || opusc == 10 )
     {
        Serial.printf("pid-out: %f, DH:%d, DP: %d\n",  pid_out, duty_heatbed, duty_peltier );   
        opusc=0;
