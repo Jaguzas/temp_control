@@ -16,6 +16,7 @@
 
 // ZMIENNE
 
+// Kontroler PID
 class PID
 {
 public:
@@ -30,8 +31,12 @@ public:
   ~PID();
   double calculate(double setpoint, double pv);
   void reset();
-
-private:
+  double get_Kp() { return _Kp;  }
+  double get_Kd() { return _Kd; }
+  double get_Ki() { return _Ki; }
+  void wydruki_ON() { _drukuj = true; }
+  void wydruki_OFF() { _drukuj = false; }
+protected:
   double _dt;
   double _max_val;
   double _min_val;
@@ -41,6 +46,7 @@ private:
   double _pre_error;
   double _integral;
   // double _lastT;
+  bool _drukuj;
 };
 
 
@@ -61,6 +67,7 @@ PID::PID(
   _integral(0)
   //_lastT(0)
 {
+  wydruki_ON();
 }
 
 void PID::reset()
@@ -102,13 +109,292 @@ double PID::calculate(double setpoint, double pv)
   // Save error to previous error
   _pre_error = error;
 
-  printf("calc: dt=%.2f, err=%.2f => %.2f (%.2f)\n", dt, error, output, output_org);
+  if ( _drukuj)
+  {
+    Serial.printf("calc: Kp=%.4f, Kd=%.4f, Ki=%.4f, err=%.2f => %.2f (%.2f)\n", _Kp, _Kd, _Ki, error, output, output_org);
+  }
   return output;
 }
 
 PID::~PID()
 {
 }
+
+// Kontroler PID z fuzzy logic gain scheduling
+class FuzzyPID : public PID
+{
+  public:
+    FuzzyPID(double dt, double max, double min, double Kp, double Kd, double Ki);
+    double calculate(double setpoint, double pv);
+    void gain_scheduling(double error, double d_error );
+    
+  private:
+    // funkcje przynaleznosci i dla error i delta-error:
+    enum E_Member {
+      E_Negative_Big,
+      E_Negative_Medium,
+      E_Negative_Small,
+      E_Zero,
+      E_Positive_Small,
+      E_Positive_Medium,
+      E_Positive_Big      
+    };
+     const char *Nazwa_E_Member(E_Member e) {
+      const char *n = "Nieznana";
+      switch (e)
+      {
+        case E_Negative_Big:
+        n = "E_Negative_Big";
+        break;
+        case E_Negative_Medium:
+        n = "E_Negative_Medium";
+        break;
+        case E_Negative_Small:
+        n = "E_Negative_Small";
+        break;
+        case E_Zero:
+        n = "E_Zero";
+        break;  
+        case E_Positive_Small:
+        n = "E_Positive_Small";
+        break;
+        case E_Positive_Medium:
+        n = "E_Positive_Medium";
+        break;
+        case E_Positive_Big:
+        n = "E_Positive_Big";
+        break;
+      }
+      return n;
+    };
+
+    // funkcje przynaleznosci i dla K
+    enum K_Member {
+      K_Small,
+      K_Big
+    };
+    const char* Nazwa_K_Member(K_Member k)
+    {
+      const char *n = "Nieznanan";
+      switch (k) 
+      {
+        case K_Big:
+        n = "Big";
+        break;
+        case K_Small:
+        n = "Small";
+        break;
+      }
+      return n;
+    }
+    // funkcje przynaleznosci dla alfa, gdzie Ki = sqrt(Kp) / alpha * Kd
+    enum A_Member {
+      A_Small = 2,
+      A_Medium_Small = 3,
+      A_Medium = 4,
+      A_Big = 5
+    };
+    static K_Member Kp_Rules[E_Positive_Big + 1][E_Positive_Big + 1];    
+    static K_Member Kd_Rules[E_Positive_Big + 1][E_Positive_Big + 1];
+    static A_Member Alpha_Rules[E_Positive_Big + 1][E_Positive_Big + 1];
+
+    double _max_error; // maksymalny error, do normalizacji wartosci err do uzycia w regulach
+    double _max_d_error; // maksymalny przrost bledu
+    //bool  _pierwsze_calc;
+
+    double _Kp_max;
+    double _Kp_min;
+    double _Kd_max;
+    double _Kd_min;
+
+    bool _pierwsze_wywolanie;
+    
+    E_Member fuzify_err(double e);
+    double defuzzify_K( K_Member m );
+    double defuzzify_Alpha(A_Member a);
+   
+};
+
+
+FuzzyPID::K_Member FuzzyPID:: Kp_Rules[E_Positive_Big + 1][E_Positive_Big + 1] = {
+   //          E_NB,     E_NM,    E_NS,    E_Zero, E_PS,    E_PM,    E_PB       
+   /* NB */  { K_Big,   K_Big,   K_Big,   K_Big,  K_Big,   K_Big,   K_Big   },
+   /* NM */  { K_Small, K_Big,   K_Big,   K_Big,  K_Big,   K_Big,   K_Small },
+   /* NS */  { K_Small, K_Small, K_Big,   K_Big,  K_Big,   K_Small, K_Small },
+   /* Z */   { K_Small, K_Small, K_Small, K_Big,  K_Small, K_Small, K_Small },
+   /* PS */  { K_Small, K_Small, K_Big,   K_Big,  K_Big,   K_Small, K_Small },
+   /* PM */  { K_Small, K_Big,   K_Big,   K_Big,  K_Big,   K_Big,   K_Small },
+   /* PB */  { K_Big,   K_Big,   K_Big,   K_Big,  K_Big,   K_Big,   K_Big   }
+};
+
+
+FuzzyPID::K_Member FuzzyPID::Kd_Rules[E_Positive_Big + 1][E_Positive_Big + 1] = {
+      { K_Big,   K_Big,   K_Big,   K_Big,  K_Big,   K_Big,   K_Big   },
+      { K_Small, K_Big,   K_Big,   K_Big,  K_Big,   K_Big,   K_Small },
+      { K_Small, K_Small, K_Big,   K_Big,  K_Big,   K_Small, K_Small },
+      { K_Small, K_Small, K_Small, K_Big,  K_Small, K_Small, K_Small },
+      { K_Small, K_Small, K_Big,   K_Big,  K_Big,   K_Small, K_Small },
+      { K_Small, K_Big,   K_Big,   K_Big,  K_Big,   K_Big,   K_Small },
+      { K_Big,   K_Big,   K_Big,   K_Big,  K_Big,   K_Big,   K_Big   }
+};
+
+FuzzyPID::A_Member FuzzyPID::Alpha_Rules[E_Positive_Big + 1][E_Positive_Big + 1] = {
+  { A_Small,        A_Small,        A_Small,        A_Small,        A_Small,        A_Small,        A_Small        },
+  { A_Medium_Small, A_Medium_Small, A_Small,        A_Small,        A_Small,        A_Medium_Small, A_Medium_Small },
+  { A_Medium,       A_Medium_Small, A_Medium_Small, A_Small,        A_Medium_Small, A_Medium_Small, A_Medium       },
+  { A_Big,          A_Medium,       A_Medium_Small, A_Medium_Small, A_Medium_Small, A_Medium,       A_Big          },
+  { A_Medium,       A_Medium_Small, A_Medium_Small, A_Small,        A_Medium_Small, A_Medium_Small, A_Medium       },
+  { A_Medium_Small, A_Medium_Small, A_Small,        A_Small,        A_Small,        A_Medium_Small, A_Medium_Small },
+  { A_Small,        A_Small,        A_Small,        A_Small,        A_Small,        A_Small,        A_Small        }
+};
+
+
+FuzzyPID::FuzzyPID(double dt, double max, double min, double Kp, double Kd, double Ki) :
+  PID( dt, max, min, Kp, Kd, Ki )
+{
+  // Wzmocnienie przy ktorym kontroler P utrzymuje oscylacje
+  //  Z artykulu:
+  //double Ku = 2.4495;
+  //_Kp_max = Ku * 0.6;
+  //_Kp_min = Ku * 0.32;
+  //_Kd_max = Ku * 0.15;
+  //_Kd_min = Ku * 0.08;
+
+  // Z doswiadczenia ze zwyklym PID:
+  // Kp = 2,4495,                 
+  // Kd = 20.0471,                 
+  // Ki = 0.0599
+  _Kp_max = 4.7;             
+  _Kp_min = 1.0;             
+  _Kd_max = 0.00; //40.0;            
+  _Kd_min = 0.00;  //0.001;        
+  
+  _max_d_error = 0;
+  _max_error = 0;  
+  _pierwsze_wywolanie = true;
+
+  // wydruki z klasy bazowej wylaczamy:
+  wydruki_OFF();
+}
+
+double FuzzyPID::calculate(double setpoint, double pv)
+{
+  double error = setpoint - pv;
+  double d_error = error - _pre_error;
+  double output = PID::calculate(setpoint, pv);
+    
+  
+  // pierwsze wywolanie
+  if ( _max_error == 0 )
+  {
+    _max_error = abs(error);
+    // Poczatkowo bardzo maly przyrost bledu: ustali sie przy nastepnych odczytach
+    _max_d_error = 0.000001;
+  }
+  else {
+    // Serial.printf("MAX_ERROR: %f. MAX_DERROR: %f\n", _max_error, _max_d_error);            
+        
+    // wolamy gain_scheduling jezeli juz ustalony err i d_err    
+    if ( abs(error) > abs(_max_error) ) {
+         _max_error = abs(error);
+    }
+    if ( abs(d_error) > abs(_max_d_error))
+    {
+      _max_d_error = abs(d_error);
+    }    
+     gain_scheduling( error, d_error); // pre_error liczony przez calcuate
+  }
+
+  return output;
+}
+
+
+void FuzzyPID::gain_scheduling(double error, double d_error)
+{
+  // normalizujemy blad i pochodna, zeby byly w przedziale <-1,1>
+  double e  = error / _max_error;
+  double de = d_error / _max_d_error;
+  E_Member m_e = fuzify_err(e);
+  E_Member m_de = fuzify_err(de);
+  
+  K_Member m_Kp = Kp_Rules[m_e][m_de];
+  K_Member m_Kd = Kd_Rules[m_e][m_de];
+  A_Member m_Alpha = Alpha_Rules[m_e][m_de];  
+
+   double prev_Kp = _Kp;
+   double prev_Kd = _Kd;
+   double prev_Ki = _Ki;
+
+  _Kp = (_Kp_max - _Kp_min) * defuzzify_K(m_Kp) + _Kp_min;
+  _Kd = (_Kd_max - _Kd_min) * defuzzify_K(m_Kd) + _Kd_min;
+  _Ki = sqrt(_Kp) / (defuzzify_Alpha(m_Alpha) * _Kd);
+
+  if ( abs(_Kp - prev_Kp) > 0.0001 ||
+       abs(_Kd - prev_Kd) > 0.0001 ||
+       abs(_Kd - prev_Kd) > 0.0001 )
+  {
+    Serial.printf("err: %.4f, %s, d_err: %.4f, %s => m_Kp: %s, m_Kd: %s\n", e, Nazwa_E_Member(m_e), de, Nazwa_E_Member(m_de), Nazwa_K_Member(m_Kp), Nazwa_K_Member(m_Kd));
+    Serial.printf("----- ZMIANA: Kp: %.4f -> %.4f, Kd: %.4f -> %.4f, Ki: %.4f -> %.4f\n", prev_Kp, _Kp, prev_Kd, _Kd, prev_Ki, _Ki);
+  }
+}
+
+FuzzyPID::E_Member FuzzyPID::fuzify_err(double e)
+{
+  E_Member m;
+  double krok = 2.0 / 7.0;
+  if ( e >= -1.0 && e <= (-1.0 + krok) )
+  {
+    m = E_Negative_Big;
+  }
+  else if ( e > -1.0 + krok && e <= (-1.0 + (2.0 * krok)) )
+  {
+    m = E_Negative_Medium;
+  }
+  else if ( e > -1.0 + (2.0*krok) && e <= (-1.0 + (3.0 * krok)) )
+  {
+    m = E_Negative_Small;
+  }
+  else if ( e > -1.0 + (3.0*krok) && e <= (-1.0 + (4.0 * krok)) )
+  {
+    m = E_Zero;
+  }
+  else if ( e > -1.0 + (4.0*krok) && e <= (-1.0 + (5.0 * krok)) )
+  {
+    m = E_Positive_Small;
+  }
+  else if ( e > -1.0 + (5.0*krok) && e <= (-1.0 + (6.0 * krok)) )
+  { 
+    m = E_Positive_Medium;
+  }
+  else if ( e > -1.0 + (6.0*krok) && e <= (-1.0 + (7.0 * krok)) )
+  {
+    m = E_Positive_Big;
+  }
+  return m;
+}
+
+double FuzzyPID::defuzzify_K( K_Member m )
+{
+  double k = 0;
+  if (m == K_Big )
+  {
+    k = 0.45;
+  }
+  else // small
+  {
+    k = 0.05;
+  }
+  return k;
+}
+
+double FuzzyPID::defuzzify_Alpha( A_Member m )
+{
+  // ??
+  return (double) m;
+}
+
+
+
 
 //sterowanie
 double temp_zadana = 24.0;
@@ -132,10 +418,18 @@ const double min_punkt_chlodzenia = 0.0;
 const double T = 1000;
 static PID pid (T, 
                 max_punkt_grzania - min_punkt_grzania,  // max
-                0, // -(max_punkt_grzania - min_punkt_grzania),   // min
-                 2.4495,       //1.4289,            //2.4495,   // Kp
-                 20.0471,      //0.00,              //20.0471, // Kd
-                 0.0599);      //0.0032);           // 0.0599);  // Ki
+                0,  // -(max_punkt_grzania - min_punkt_grzania),   // min
+                2.4495,       //1.4289,            // Kp
+                20.0471,      //0.00,              // Kd
+                0.0599);      //0.0032);           // Ki
+
+static FuzzyPID fpid(T,
+                max_punkt_grzania - min_punkt_grzania,  // max
+                0,  // -(max_punkt_grzania - min_punkt_grzania),   // min
+                1.4289,    //2.4495,                 // Kp
+                0.00,      //20.0471,                 // Kd
+                0.0032);   //0.0599);                // Ki
+
 
 //sciezki do plikow
 const char *ssidPath = "/ssid.txt";
@@ -292,14 +586,14 @@ bool sterowanie(int &tryb, int &duty_heatbed, int &duty_peltier)
     if (temp_aktualna < temp_zadana - (histereza/2.0))
     {
 
-      duty_heatbed = 180;
+      duty_heatbed = 355;
       duty_peltier = 0;
       //Serial.println("Grzeje!");
     }
     if(temp_aktualna > temp_zadana + (histereza/2.0))
     {
       duty_heatbed = 0;
-      duty_peltier = 255;
+      duty_peltier = 511;
       //Serial.println("Chlodze!");
     }
     
@@ -311,48 +605,52 @@ bool sterowanie(int &tryb, int &duty_heatbed, int &duty_peltier)
   //PID
   if(tryb == 2)
   {    
-
     double duty = 0;
     // przyrost wartosci:    
     double pid_out = pid.calculate(temp_zadana, temp_aktualna);    
 
-    //duty_heatbed = pid_out;
-    
-    // if ( pid_out >= 0 )
-    {       
-       //  double pid_output, double max_pid_output, double pwm_range_begin, double pwm_range_end 
-       // duty = pid_output_to_duty(  pid_out,  max_pid_output, min_punkt_grzania, max_punkt_grzania);              
-       duty_heatbed = (int) pid_out + min_punkt_grzania;                   
-       if ( duty_heatbed < 0 )
-       {
-          duty_heatbed = 0;
-       }
-       //duty_peltier = (int) 0;         
-       
-    }
-    //else {      
-       //duty_heatbed = 0;       
-       // duty = pid_output_to_duty(  pid_out,  max_pid_output, min_punkt_chlodz, max_punkt_chlodz);                  
-       //duty_peltier = (int) - (pid_out - min_punkt_chlodzenia);      
-    //}
-    
+    duty_heatbed = (int) pid_out + min_punkt_grzania;                   
+    if ( duty_heatbed < 0 )
+    {
+       duty_heatbed = 0;
+    }    
     static int opusc = 0;
     opusc++;
     if ( true || opusc == 10 )
-    {
+    {      
        Serial.printf("pid-out: %f, DH:%d, DP: %d\n",  pid_out, duty_heatbed, duty_peltier );   
        opusc=0;
-    }
-    
+    }    
     ledcWrite(kanal1, duty_heatbed);
     ledcWrite(kanal2, duty_peltier);
-
     return true;
   }
   //Logika rozmyta
   if(tryb == 3)
   {
-    
+    static int last_hb_duty = 0;
+    double duty = 0;
+    // przyrost wartosci:    
+    double pid_out = fpid.calculate(temp_zadana, temp_aktualna);    
+
+    duty_heatbed = (int) pid_out + min_punkt_grzania;                   
+    if ( duty_heatbed < 0 )
+    {
+       duty_heatbed = 0;
+    }    
+    static int opusc = 0;
+    opusc++;
+    if ( true || opusc == 10 )
+    {
+      if ( last_hb_duty != duty_heatbed )
+      {
+         Serial.printf("fpid-out: %f, DH (zmiana):%d, DP: %d\n",  pid_out, duty_heatbed, duty_peltier );   
+      }
+      last_hb_duty = duty_heatbed;
+      opusc=0;
+    }    
+    ledcWrite(kanal1, duty_heatbed);
+    ledcWrite(kanal2, duty_peltier);
     return true;
   }
   Serial.println("ERROR - Wrong mode set.");
